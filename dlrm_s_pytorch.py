@@ -970,7 +970,7 @@ if __name__ == "__main__":
     # print global stats
     print("Total iterations ran: ", total_iter_global)
     print("Average number of iters/sec: ", total_iter_global/total_time_global)
-    print("Average milli-seconds per iter: ", 1000*total_time_global/total_iter_global)
+    print("Average milliseconds per iter: ", 1000*total_time_global/total_iter_global)
 
     # profiling
     if args.enable_profiling:
