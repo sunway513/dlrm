@@ -453,6 +453,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--save-model", type=str, default="")
     parser.add_argument("--load-model", type=str, default="")
+    parser.add_argument("--num-warmup-iters", type=int, default=10)
     args = parser.parse_args()
 
     ### some basic setup ###
@@ -751,6 +752,8 @@ if __name__ == "__main__":
     total_loss = 0
     total_accu = 0
     total_iter = 0
+    total_time_global = 0
+    total_iter_global = 0
     k = 0
 
     # Load model is specified
@@ -790,7 +793,23 @@ if __name__ == "__main__":
             )
         )
 
-    print("time/loss/accuracy (if enabled):")
+    ## warmup runs
+    print("Running warmup iters...")
+    for wj, (X, lS_o, lS_i, T) in enumerate(train_loader):
+        if wj >= args.num_warmup_iters:
+            break
+        #forward pass
+        Z = dlrm_wrap(X, lS_o, lS_i, use_gpu, device)
+        #loss
+        E = loss_fn_wrap(Z, T, use_gpu, device)
+        #backward pass
+        if not args.inference_only:
+            optimizer.zero_grad()
+            E.backward()
+            optimizer.step()
+    print("Finished warmup iters.")
+
+    print("time/loss/accurac/y (if enabled):")
     with torch.autograd.profiler.profile(args.enable_profiling, use_gpu) as prof:
         while k < args.nepochs:
             for j, (X, lS_o, lS_i, T) in enumerate(train_loader):
@@ -844,6 +863,8 @@ if __name__ == "__main__":
                 total_accu += A
                 total_loss += L
                 total_iter += 1
+                total_time_global += t2 - t1
+                total_iter_global += 1
 
                 print_tl = ((j + 1) % args.print_freq == 0) or (j + 1 == nbatches)
                 print_ts = (
@@ -945,6 +966,11 @@ if __name__ == "__main__":
                     )
 
             k += 1  # nepochs
+
+    # print global stats
+    print("Total iterations ran: ", total_iter_global)
+    print("Average number of iters/sec: ", total_iter_global/total_time_global)
+    print("Average milli-seconds per iter: ", 1000*total_time_global/total_iter_global)
 
     # profiling
     if args.enable_profiling:
