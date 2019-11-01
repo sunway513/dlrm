@@ -809,7 +809,7 @@ if __name__ == "__main__":
             optimizer.step()
     print("Finished warmup iters.")
 
-    print("time/loss/accurac/y (if enabled):")
+    print("time/loss/accuracy (if enabled):")
     with torch.autograd.profiler.profile(args.enable_profiling, use_gpu) as prof:
         while k < args.nepochs:
             for j, (X, lS_o, lS_i, T) in enumerate(train_loader):
