@@ -428,7 +428,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-ind-range", type=int, default=-1)
     parser.add_argument("--num-indices-per-lookup", type=int, default=10)
     parser.add_argument("--num-indices-per-lookup-fixed", type=bool, default=False)
-    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--memory-map", action="store_true", default=False)
     # training
     parser.add_argument("--mini-batch-size", type=int, default=1)
@@ -548,6 +548,10 @@ if __name__ == "__main__":
             # where each tuple is (X, lS_o, lS_i, T)
             if use_gpu:
                 (X, lS_o, lS_i, T) = list_of_tuples[0]
+                return (X,
+                        [S_o for S_o in lS_o],
+                        [S_i for S_i in lS_i],
+                        T)
                 return (X.pin_memory(),
                         [S_o.pin_memory() for S_o in lS_o],
                         [S_i.pin_memory() for S_i in lS_i],
