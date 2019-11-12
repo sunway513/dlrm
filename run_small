@@ -1,0 +1,2 @@
+export HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+python3.6 -m bind_launch --nproc_per_node 1 --nsockets_per_node 2 --ncores_per_socket 16 run_dlrm_pytorch_caffe2.py --dlrm-dir ./dlrm --config small
