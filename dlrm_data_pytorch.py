@@ -10,8 +10,11 @@
 #    i) R. Hassan, A. Harris, N. Topham and A. Efthymiou "Synthetic Trace-Driven
 #    Simulation of Cache Memory", IEEE AINAM'07
 # 3) public data set
-#    i) Kaggle Display Advertising Challenge Dataset
-#     https://labs.criteo.com/2014/09/kaggle-contest-dataset-now-available-academic-use/
+#    i) Criteo Kaggle Display Advertising Challenge Dataset
+#    https://labs.criteo.com/2014/02/kaggle-display-advertising-challenge-dataset
+#    ii) Criteo Terabyte Dataset
+#    https://labs.criteo.com/2013/12/download-terabyte-click-logs
+
 
 from __future__ import absolute_import, division, print_function, unicode_literals
 
@@ -45,6 +48,7 @@ class CriteoDataset(Dataset):
             self,
             dataset,
             max_ind_range,
+            sub_sample_rate,
             randomize,
             split="train",
             raw_path="",
@@ -65,19 +69,25 @@ class CriteoDataset(Dataset):
             out_file = "terabyte_processed"
         else:
             raise(ValueError("Data set option is not supported"))
+        self.max_ind_range = max_ind_range
         self.memory_map = memory_map
 
         # split the datafile into path and filename
         lstr = raw_path.split("/")
         self.d_path = "/".join(lstr[0:-1]) + "/"
-        self.npzfile = lstr[-1].split(".")[0] + "_day" if dataset == "kaggle" else "day"
-        self.trafile = lstr[-1].split(".")[0] + "_fea" if dataset == "kaggle" else "fea"
+        self.d_file = lstr[-1].split(".")[0] if dataset == "kaggle" else lstr[-1]
+        self.npzfile = self.d_path + (
+            (self.d_file + "_day") if dataset == "kaggle" else self.d_file
+        )
+        self.trafile = self.d_path + (
+            (self.d_file + "_fea") if dataset == "kaggle" else "fea"
+        )
 
         # check if pre-processed data is available
         data_ready = True
         if memory_map:
             for i in range(days):
-                reo_data = self.d_path + self.npzfile + "_{0}_reordered.npz".format(i)
+                reo_data = self.npzfile + "_{0}_reordered.npz".format(i)
                 if not path.exists(str(reo_data)):
                     data_ready = False
         else:
@@ -95,6 +105,7 @@ class CriteoDataset(Dataset):
                 raw_path,
                 out_file,
                 max_ind_range,
+                sub_sample_rate,
                 days,
                 split,
                 randomize,
@@ -103,7 +114,7 @@ class CriteoDataset(Dataset):
             )
 
         # get a number of samples per day
-        total_file = self.d_path + self.npzfile + "_perday_counts.npz"
+        total_file = self.d_path + self.d_file + "_day_count.npz"
         with np.load(total_file) as data:
             total_per_file = data["total_per_file"]
         # compute offsets per file
@@ -121,14 +132,50 @@ class CriteoDataset(Dataset):
                 self.day = 0
             elif split == 'test' or split == 'val':
                 self.day = days - 1
-                num_samples = self.offset_per_file[-1] - self.offset_per_file[-2]
+                num_samples = self.offset_per_file[self.day - 1] - \
+                              self.offset_per_file[self.day - 2]
                 self.test_size = int(np.ceil(num_samples / 2.))
                 self.val_size = num_samples - self.test_size
             else:
                 sys.exit("ERROR: dataset split is neither none, nor train or test.")
 
+            '''
+            # text
+            print("text")
+            for i in range(days):
+                fi = self.npzfile + "_{0}".format(i)
+                with open(fi) as data:
+                    ttt = 0; nnn = 0
+                    for _j, line in enumerate(data):
+                        ttt +=1
+                        if np.int32(line[0]) > 0:
+                            nnn +=1
+                    print("day=" + str(i) + " total=" + str(ttt) + " non-zeros="
+                          + str(nnn) + " ratio=" +str((nnn * 100.) / ttt) + "%")
+            # processed
+            print("processed")
+            for i in range(days):
+                fi = self.npzfile + "_{0}_processed.npz".format(i)
+                with np.load(fi) as data:
+                    yyy = data["y"]
+                ttt = len(yyy)
+                nnn = np.count_nonzero(yyy)
+                print("day=" + str(i) + " total=" + str(ttt) + " non-zeros="
+                      + str(nnn) + " ratio=" +str((nnn * 100.) / ttt) + "%")
+            # reordered
+            print("reordered")
+            for i in range(days):
+                fi = self.npzfile + "_{0}_reordered.npz".format(i)
+                with np.load(fi) as data:
+                    yyy = data["y"]
+                ttt = len(yyy)
+                nnn = np.count_nonzero(yyy)
+                print("day=" + str(i) + " total=" + str(ttt) + " non-zeros="
+                      + str(nnn) + " ratio=" +str((nnn * 100.) / ttt) + "%")
+            '''
+
             # load unique counts
-            with np.load(self.d_path + self.npzfile + "_counts.npz") as data:
+            with np.load(self.d_path + self.d_file + "_fea_count.npz") as data:
                 self.counts = data["counts"]
             self.m_den = den_fea  # X_int.shape[1]
             self.n_emb = len(self.counts)
@@ -208,7 +255,7 @@ class CriteoDataset(Dataset):
                 if index == self.offset_per_file[self.day]:
                     # print("day_boundary switch", index)
                     self.day_boundary = self.offset_per_file[self.day]
-                    fi = self.d_path + self.npzfile + "_{0}_reordered.npz".format(
+                    fi = self.npzfile + "_{0}_reordered.npz".format(
                         self.day
                     )
                     with np.load(fi) as data:
@@ -221,7 +268,7 @@ class CriteoDataset(Dataset):
             elif self.split == 'test' or self.split == 'val':
                 # only a single day is used for testing
                 if index == 0:
-                    fi = self.d_path + self.npzfile + "_{0}_reordered.npz".format(
+                    fi = self.npzfile + "_{0}_reordered.npz".format(
                         self.day
                     )
                     with np.load(fi) as data:
@@ -245,7 +292,10 @@ class CriteoDataset(Dataset):
 
     def _default_preprocess(self, X_int, X_cat, y):
         X_int = torch.log(torch.tensor(X_int, dtype=torch.float) + 1)
-        X_cat = torch.tensor(X_cat, dtype=torch.long)
+        if self.max_ind_range > 0:
+            X_cat = torch.tensor(X_cat % self.max_ind_range, dtype=torch.long)
+        else:
+            X_cat = torch.tensor(X_cat, dtype=torch.long)
         y = torch.tensor(y.astype(np.float32))
 
         return X_int, X_cat, y
@@ -253,9 +303,9 @@ class CriteoDataset(Dataset):
     def __len__(self):
         if self.memory_map:
             if self.split == 'none':
-                return self.offset_per_file[-1]
+                return self.offset_per_file[self.day - 1]
             elif self.split == 'train':
-                return self.offset_per_file[-2]
+                return self.offset_per_file[self.day - 2]
             elif self.split == 'test':
                 return self.test_size
             elif self.split == 'val':

@@ -51,7 +51,7 @@ input:
 
     where ' denotes transpose operation
 
-Cite [Work](http://arxiv.org/abs/1906.00091):
+Cite [Work](https://arxiv.org/abs/1906.00091):
 ```
 @article{DLRM19,
   author    = {Maxim Naumov and Dheevatsa Mudigere and Hao{-}Jun Michael Shi and Jianyu Huang and Narayanan Sundaraman and Jongsoo Park and Xiaodong Wang and Udit Gupta and Carole{-}Jean Wu and Alisson G. Azzolini and Dmytro Dzhulgakov and Andrey Mallevich and Ilia Cherniavskii and Yinghai Lu and Raghuraman Krishnamoorthi and Ansha Yu and Volodymyr Kondratenko and Stephanie Pereira and Xianjie Chen and Wenlin Chen and Vijay Rao and Bill Jia and Liang Xiong and Misha Smelyanskiy},
@@ -59,13 +59,13 @@ Cite [Work](http://arxiv.org/abs/1906.00091):
   journal   = {CoRR},
   volume    = {abs/1906.00091},
   year      = {2019},
-  url       = {http://arxiv.org/abs/1906.00091},
+  url       = {https://arxiv.org/abs/1906.00091},
 }
 ```
 
 Related Work:
 
-On the [system architecture implications](http://arxiv.org/abs/1906.03109), with DLRM as one of the benchmarks,
+On the [system architecture implications](https://arxiv.org/abs/1906.03109), with DLRM as one of the benchmarks,
 ```
 @article{ArchImpl19,
   author    = {Udit Gupta and Xiaodong Wang and Maxim Naumov and Carole{-}Jean Wu and Brandon Reagen and David Brooks and Bradford Cottel and Kim M. Hazelwood and Bill Jia and Hsien{-}Hsin S. Lee and Andrey Malevich and Dheevatsa Mudigere and Mikhail Smelyanskiy and Liang Xiong and Xuan Zhang},
@@ -73,7 +73,7 @@ On the [system architecture implications](http://arxiv.org/abs/1906.03109), with
   journal   = {CoRR},
   volume    = {abs/1906.03109},
   year      = {2019},
-  url       = {http://arxiv.org/abs/1906.03109},
+  url       = {https://arxiv.org/abs/1906.03109},
 }
 ```
 
@@ -277,7 +277,7 @@ diff test3 (no numeric values in the output = SUCCESS)
 diff test4 (no numeric values in the output = SUCCESS)
 ```
 
-*NOTE: Testing scripts accept extra arguments which will passed along, such as --use-gpu*
+*NOTE: Testing scripts accept extra arguments which will be passed along to the model, such as --use-gpu*
 
 Benchmarking
 ------------
@@ -286,7 +286,7 @@ Benchmarking
     ./bench/dlrm_s_benchmark.sh
     ```
 
-2) The code supports interface with the [Criteo Kaggle Display Advertising Challenge Dataset](https://labs.criteo.com/2014/09/kaggle-contest-dataset-now-available-academic-use/).
+2) The code supports interface with the [Criteo Kaggle Display Advertising Challenge Dataset](https://labs.criteo.com/2014/02/kaggle-display-advertising-challenge-dataset/).
    Please do the following to prepare the dataset for use with DLRM code:
      - First, specify the raw data file (train.txt) as downloaded with --raw-data-file=<path/train.txt>
      - This is then pre-processed (categorize, concat across days...) to allow using with dlrm code
@@ -308,10 +308,12 @@ Benchmarking
      - The processed file (*.npz) can be used for subsequent runs with --processed-data-file=<path/*.npz>
 
     ```
-    ./bench/dlrm_s_criteo_terabyte.sh
+    ./bench/dlrm_s_criteo_terabyte.sh ["--memory-map --data-sub-sample-rate=0.875"]
     ```
 
-*NOTE: Benchmarking scripts accept extra arguments which will passed along, such as --num-batches=100 to limit the number of data samples*
+<img src="./terabyte_0875_loss_accuracy_plots.png" width="900" height="320">
+
+*NOTE: Benchmarking scripts accept extra arguments which will be passed along to the model, such as --num-batches=100 to limit the number of data samples*
 
 Model checkpoint saving/loading
 -------------------------------

@@ -430,6 +430,7 @@ if __name__ == "__main__":
     parser.add_argument("--data-randomize", type=str, default="total")  # or day or none
     parser.add_argument("--data-trace-enable-padding", type=bool, default=False)
     parser.add_argument("--max-ind-range", type=int, default=-1)
+    parser.add_argument("--data-sub-sample-rate", type=float, default=0.0)  # in [0, 1]
     parser.add_argument("--num-indices-per-lookup", type=int, default=10)
     parser.add_argument("--num-indices-per-lookup-fixed", type=bool, default=False)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -503,6 +504,7 @@ if __name__ == "__main__":
         train_data = dp.CriteoDataset(
             args.data_set,
             args.max_ind_range,
+            args.data_sub_sample_rate,
             args.data_randomize,
             "train",
             args.raw_data_file,
@@ -523,6 +525,7 @@ if __name__ == "__main__":
         test_data = dp.CriteoDataset(
             args.data_set,
             args.max_ind_range,
+            args.data_sub_sample_rate,
             args.data_randomize,
             "test",
             args.raw_data_file,
@@ -543,7 +546,10 @@ if __name__ == "__main__":
         ln_emb = train_data.counts
         # enforce maximum limit on number of vectors per embedding
         if args.max_ind_range > 0:
-            ln_emb = np.array(list(map(lambda x: x % args.max_ind_range, ln_emb)))
+            ln_emb = np.array(list(map(
+                lambda x: x if x < args.max_ind_range else args.max_ind_range,
+                ln_emb
+            )))
         m_den = train_data.m_den
         ln_bot[0] = m_den
     else:
@@ -763,7 +769,7 @@ if __name__ == "__main__":
 
     # Load model is specified
     if not (args.load_model == ""):
-        print("Loading saved mode {}".format(args.load_model))
+        print("Loading saved model {}".format(args.load_model))
         ld_model = torch.load(args.load_model)
         dlrm.load_state_dict(ld_model["state_dict"])
         ld_j = ld_model["iter"]
