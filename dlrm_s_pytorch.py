@@ -1001,7 +1001,7 @@ if __name__ == "__main__":
     # profiling
     if args.enable_profiling:
         with open("dlrm_s_pytorch.prof", "w") as prof_f:
-            prof_f.write(prof.key_averages().table(sort_by="cpu_time_total"))
+            prof_f.write(prof.key_averages().table(sort_by="cuda_time_total"))
             prof.export_chrome_trace("./dlrm_s_pytorch.json")
         # print(prof.key_averages().table(sort_by="cpu_time_total"))
 
