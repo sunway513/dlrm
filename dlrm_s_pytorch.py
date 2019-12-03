@@ -127,7 +127,7 @@ class DLRM_Net(nn.Module):
         # approach 2: use Sequential container to wrap all layers
         return torch.nn.Sequential(*layers)
 
-    def create_emb(self, m, ln):
+    def create_emb(self, m, ln, ndevices):
         emb_l = nn.ModuleList()
         for i in range(0, ln.size):
             n = ln[i]
@@ -145,7 +145,9 @@ class DLRM_Net(nn.Module):
             # EE.weight.data.copy_(torch.tensor(W))
             # approach 3
             # EE.weight = Parameter(torch.tensor(W),requires_grad=True)
-            emb_l.append(EE)
+            d = torch.device("cuda:" + str(i % ndevices))
+
+            emb_l.append(EE.to(d))
 
         return emb_l
 
@@ -184,7 +186,7 @@ class DLRM_Net(nn.Module):
             self.sync_dense_params = sync_dense_params
             self.loss_threshold = loss_threshold
             # create operators
-            self.emb_l = self.create_emb(m_spa, ln_emb)
+            self.emb_l = []
             self.bot_l = self.create_mlp(ln_bot, sigmoid_bot, use_bias=use_bias_in_linear)
             self.top_l = self.create_mlp(ln_top, sigmoid_top, use_bias=use_bias_in_linear)
 
@@ -302,13 +304,6 @@ class DLRM_Net(nn.Module):
             # replicate mlp (data parallelism)
             self.bot_l_replicas = replicate(self.bot_l, device_ids)
             self.top_l_replicas = replicate(self.top_l, device_ids)
-            # distribute embeddings (model parallelism)
-            t_list = []
-            for k, emb in enumerate(self.emb_l):
-                d = torch.device("cuda:" + str(k % ndevices))
-                emb.to(d)
-                t_list.append(emb.to(d))
-            self.emb_l = nn.ModuleList(t_list)
             self.parallel_model_batch_size = batch_size
             self.parallel_model_is_not_prepared = False
 
@@ -319,15 +314,6 @@ class DLRM_Net(nn.Module):
         # distribute sparse features (model parallelism)
         if (len(self.emb_l) != len(lS_o)) or (len(self.emb_l) != len(lS_i)):
             sys.exit("ERROR: corrupted model input detected in parallel_forward call")
-
-        t_list = []
-        i_list = []
-        for k, _ in enumerate(self.emb_l):
-            d = torch.device("cuda:" + str(k % ndevices))
-            t_list.append(lS_o[k].to(d))
-            i_list.append(lS_i[k].to(d))
-        lS_o = t_list
-        lS_i = i_list
 
         ### compute results in parallel ###
         # bottom mlp
@@ -723,6 +709,9 @@ if __name__ == "__main__":
             dlrm.ndevices = min(ngpus, args.mini_batch_size, num_fea - 1)
         dlrm = dlrm.to(device)  # .cuda()
 
+        #Add logic to allocate embedding tables on each device
+        dlrm.emb_l = dlrm.create_emb(m_spa, ln_emb, dlrm.ndevices)
+  
     # specify the loss function
     if args.loss_function == "mse":
         loss_fn = torch.nn.MSELoss(reduction="mean")
@@ -741,12 +730,12 @@ if __name__ == "__main__":
             torch.cuda.synchronize()
         return time.time()
 
-    def dlrm_wrap(X, lS_o, lS_i, use_gpu, device):
+    def dlrm_wrap(X, lS_o, lS_i, use_gpu, device, ndevices):
         if use_gpu:  # .cuda()
             return dlrm(
                 X.to(device),
-                [S_o.to(device) for S_o in lS_o],
-                [S_i.to(device) for S_i in lS_i],
+                [S_o.to(i % ndevices) for i,S_o in enumerate(lS_o)],
+                [S_i.to(i % ndevices) for i,S_i in enumerate(lS_i)],
             )
         else:
             return dlrm(X, lS_o, lS_i)
@@ -838,7 +827,7 @@ if __name__ == "__main__":
                 t1 = time_wrap(use_gpu)
 
                 # forward pass
-                Z = dlrm_wrap(X, lS_o, lS_i, use_gpu, device)
+                Z = dlrm_wrap(X, lS_o, lS_i, use_gpu, device, dlrm.ndevices)
 
                 # loss
                 E = loss_fn_wrap(Z, T, use_gpu, device)
@@ -920,7 +909,7 @@ if __name__ == "__main__":
 
                         # forward pass
                         Z_test = dlrm_wrap(
-                            X_test, lS_o_test, lS_i_test, use_gpu, device
+                            X_test, lS_o_test, lS_i_test, use_gpu, device, dlrm.ndevices
                         )
                         # loss
                         E_test = loss_fn_wrap(Z_test, T_test, use_gpu, device)
