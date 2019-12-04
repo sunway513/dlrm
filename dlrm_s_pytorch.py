@@ -74,7 +74,7 @@ import torch.nn as nn
 from torch.nn.parallel.parallel_apply import parallel_apply
 from torch.nn.parallel.replicate import replicate
 from torch.nn.parallel.scatter_gather import gather, scatter
-
+from quorem.qr_embedding_bag import QREmbeddingBag
 
 # from torchviz import make_dot
 # import torch.nn.functional as Functional
@@ -133,20 +133,24 @@ class DLRM_Net(nn.Module):
             n = ln[i]
 
             # construct embedding operator
-            EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
-            # initialize embeddings
-            # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
-            W = np.random.uniform(
-                low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
-            ).astype(np.float32)
-            # approach 1
-            EE.weight.data = torch.tensor(W, requires_grad=True)
-            # approach 2
-            # EE.weight.data.copy_(torch.tensor(W))
-            # approach 3
-            # EE.weight = Parameter(torch.tensor(W),requires_grad=True)
-            d = torch.device("cuda:" + str(i % ndevices))
+            if self.qr_flag and n > self.qr_threshold:
+                EE = QREmbeddingBag(n, m, self.qr_collisions,
+                    operation=self.qr_operation, mode="sum", sparse=True)
+            else:
+                EE = nn.EmbeddingBag(n, m, mode="sum", sparse=True)
 
+                # initialize embeddings
+                # nn.init.uniform_(EE.weight, a=-np.sqrt(1 / n), b=np.sqrt(1 / n))
+                W = np.random.uniform(
+                    low=-np.sqrt(1 / n), high=np.sqrt(1 / n), size=(n, m)
+                ).astype(np.float32)
+                # approach 1
+                EE.weight.data = torch.tensor(W, requires_grad=True)
+                # approach 2
+                # EE.weight.data.copy_(torch.tensor(W))
+                # approach 3
+                # EE.weight = Parameter(torch.tensor(W),requires_grad=True)
+            d = torch.device("cuda:" + str(i % ndevices))
             emb_l.append(EE.to(d))
 
         return emb_l
@@ -166,6 +170,10 @@ class DLRM_Net(nn.Module):
         loss_threshold=0.0,
         ndevices=-1,
         emulate_8_gpu=False,
+        qr_flag=False,
+        qr_operation="mult",
+        qr_collisions=0,
+        qr_threshold=200
     ):
         super(DLRM_Net, self).__init__()
 
@@ -187,8 +195,15 @@ class DLRM_Net(nn.Module):
             self.sync_dense_params = sync_dense_params
             self.loss_threshold = loss_threshold
             self.emulate_8_gpu = emulate_8_gpu
+            # create variables for QR embedding if applicable
+            self.qr_flag = qr_flag
+            if self.qr_flag:
+                self.qr_collisions = qr_collisions
+                self.qr_operation = qr_operation
+                self.qr_threshold = qr_threshold
             # create operators
-            self.emb_l = []
+            if ndevices <= 1:
+                self.emb_l = self.create_emb(m_spa, ln_emb, 1)
             self.bot_l = self.create_mlp(ln_bot, sigmoid_bot, use_bias=use_bias_in_linear)
             self.top_l = self.create_mlp(ln_top, sigmoid_top, use_bias=use_bias_in_linear)
 
@@ -407,6 +422,11 @@ if __name__ == "__main__":
     parser.add_argument("--use-bias-in-linear", type=bool, default=False)
     parser.add_argument("--arch-interaction-op", type=str, default="dot")
     parser.add_argument("--arch-interaction-itself", action="store_true", default=False)
+    # embedding table options
+    parser.add_argument("--qr-flag", action="store_true", default=False)
+    parser.add_argument("--qr-operation", type=str, default="mult")
+    parser.add_argument("--qr-collisions", type=int, default=4)
+    parser.add_argument("--qr-threshold", type=int, default=200)
     # activations and loss
     parser.add_argument("--activation-function", type=str, default="relu")
     parser.add_argument("--loss-function", type=str, default="mse")  # or bce
@@ -447,6 +467,8 @@ if __name__ == "__main__":
     # debugging and profiling
     parser.add_argument("--print-freq", type=int, default=1)
     parser.add_argument("--test-freq", type=int, default=-1)
+    parser.add_argument("--test-mini-batch-size", type=int, default=-1)
+    parser.add_argument("--test-num-workers", type=int, default=-1)
     parser.add_argument("--print-time", action="store_true", default=False)
     parser.add_argument("--debug-mode", action="store_true", default=False)
     parser.add_argument("--enable-profiling", action="store_true", default=False)
@@ -462,6 +484,13 @@ if __name__ == "__main__":
     np.set_printoptions(precision=args.print_precision)
     torch.set_printoptions(precision=args.print_precision)
     torch.manual_seed(args.numpy_rand_seed)
+
+    if (args.test_mini_batch_size < 0):
+        # if the parameter is not set, use the training batch size
+        args.test_mini_batch_size = args.mini_batch_size
+    if (args.test_num_workers < 0):
+        # if the parameter is not set, use the same parameter for training
+        args.test_num_workers = args.num_workers
 
     use_gpu = args.use_gpu and torch.cuda.is_available()
     if use_gpu:
@@ -482,65 +511,11 @@ if __name__ == "__main__":
     ln_bot = np.fromstring(args.arch_mlp_bot, dtype=int, sep="-")
     # input data
     if args.data_generation == "dataset":
-        # input and target from dataset
-        def collate_wrapper(list_of_tuples):
-            # where each tuple is (X_int, X_cat, y)
-            transposed_data = list(zip(*list_of_tuples))
-            X_int = torch.stack(transposed_data[0], 0)
-            X_cat = torch.stack(transposed_data[1], 0)
-            T = torch.stack(transposed_data[2], 0).view(-1, 1)
 
-            sz0 = X_cat.shape[0]
-            sz1 = X_cat.shape[1]
-            if use_gpu:
-                lS_i = [X_cat[:, i].pin_memory() for i in range(sz1)]
-                lS_o = [torch.tensor(range(sz0)).pin_memory() for _ in range(sz1)]
-                return X_int.pin_memory(), lS_o, lS_i, T.pin_memory()
-            else:
-                lS_i = [X_cat[:, i] for i in range(sz1)]
-                lS_o = [torch.tensor(range(sz0)) for _ in range(sz1)]
-                return X_int, lS_o, lS_i, T
+        train_data, train_loader, test_data, test_loader = \
+            dp.make_criteo_data_and_loaders(args)
 
-        train_data = dp.CriteoDataset(
-            args.data_set,
-            args.max_ind_range,
-            args.data_sub_sample_rate,
-            args.data_randomize,
-            "train",
-            args.raw_data_file,
-            args.processed_data_file,
-            args.memory_map
-        )
-        train_loader = torch.utils.data.DataLoader(
-            train_data,
-            batch_size=args.mini_batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
-            collate_fn=collate_wrapper,
-            pin_memory=False,
-            drop_last=False,  # True
-        )
         nbatches = args.num_batches if args.num_batches > 0 else len(train_loader)
-
-        test_data = dp.CriteoDataset(
-            args.data_set,
-            args.max_ind_range,
-            args.data_sub_sample_rate,
-            args.data_randomize,
-            "test",
-            args.raw_data_file,
-            args.processed_data_file,
-            args.memory_map
-        )
-        test_loader = torch.utils.data.DataLoader(
-            test_data,
-            batch_size=args.mini_batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
-            collate_fn=collate_wrapper,
-            pin_memory=False,
-            drop_last=False,  # True
-        )
         nbatches_test = len(test_loader)
 
         ln_emb = train_data.counts
@@ -554,46 +529,11 @@ if __name__ == "__main__":
         ln_bot[0] = m_den
     else:
         # input and target at random
-        def collate_wrapper(list_of_tuples):
-            # where each tuple is (X, lS_o, lS_i, T)
-            if use_gpu:
-                (X, lS_o, lS_i, T) = list_of_tuples[0]
-                return (X.pin_memory(),
-                        [S_o.pin_memory() for S_o in lS_o],
-                        [S_i.pin_memory() for S_i in lS_i],
-                        T.pin_memory())
-            else:
-                return list_of_tuples[0]
-
         ln_emb = np.fromstring(args.arch_embedding_size, dtype=int, sep="-")
         if args.emulate_8_gpu:
             ln_emb = ln_emb[:int(ngpus * ln_emb.size/8)]
         m_den = ln_bot[0]
-        train_data = dp.RandomDataset(
-            m_den,
-            ln_emb,
-            args.data_size,
-            args.num_batches,
-            args.mini_batch_size,
-            args.num_indices_per_lookup,
-            args.num_indices_per_lookup_fixed,
-            1,  # num_targets
-            args.round_targets,
-            args.data_generation,
-            args.data_trace_file,
-            args.data_trace_enable_padding,
-            reset_seed_on_access=True,
-            rand_seed=args.numpy_rand_seed
-        )  # WARNING: generates a batch of lookups at once
-        train_loader = torch.utils.data.DataLoader(
-            train_data,
-            batch_size=1,
-            shuffle=False,
-            num_workers=args.num_workers,
-            collate_fn=collate_wrapper,
-            pin_memory=False,
-            drop_last=False,  # True
-        )
+        train_data, train_loader = dp.make_random_data_and_loader(args, ln_emb, m_den)
         nbatches = args.num_batches if args.num_batches > 0 else len(train_loader)
 
     ### parse command line arguments ###
@@ -626,13 +566,30 @@ if __name__ == "__main__":
             + " does not match first dim of bottom mlp "
             + str(ln_bot[0])
         )
-    if m_spa != m_den_out:
-        sys.exit(
-            "ERROR: arch-sparse-feature-size "
-            + str(m_spa)
-            + " does not match last dim of bottom mlp "
-            + str(m_den_out)
-        )
+    if args.qr_flag:
+        if args.qr_operation == "concat" and 2 * m_spa != m_den_out:
+            sys.exit(
+                "ERROR: 2 arch-sparse-feature-size "
+                + str(2 * m_spa)
+                + " does not match last dim of bottom mlp "
+                + str(m_den_out)
+                + " (note that the last dim of bottom mlp must be 2x the embedding dim)"
+            )
+        if args.qr_operation != "concat" and m_spa != m_den_out:
+            sys.exit(
+                "ERROR: arch-sparse-feature-size "
+                + str(m_spa)
+                + " does not match last dim of bottom mlp "
+                + str(m_den_out)
+            )
+    else:
+        if m_spa != m_den_out:
+            sys.exit(
+                "ERROR: arch-sparse-feature-size "
+                + str(m_spa)
+                + " does not match last dim of bottom mlp "
+                + str(m_den_out)
+            )
     if num_int != ln_top[0]:
         sys.exit(
             "ERROR: # of feature interactions "
@@ -693,6 +650,8 @@ if __name__ == "__main__":
             print([S_i.detach().cpu().tolist() for S_i in lS_i])
             print(T.detach().cpu().numpy())
 
+    ndevices = min(ngpus, args.mini_batch_size, num_fea - 1) if use_gpu else -1
+
     ### construct the neural network specified above ###
     # WARNING: to obtain exactly the same initialization for
     # the weights we need to start from the same random seed.
@@ -710,6 +669,11 @@ if __name__ == "__main__":
         sync_dense_params=args.sync_dense_params,
         loss_threshold=args.loss_threshold,
         emulate_8_gpu=args.emulate_8_gpu,
+        ndevices=ndevices,
+        qr_flag=args.qr_flag,
+        qr_operation=args.qr_operation,
+        qr_collisions=args.qr_collisions,
+        qr_threshold=args.qr_threshold
     )
     # test prints
     if args.debug_mode:
@@ -719,15 +683,12 @@ if __name__ == "__main__":
         # print(dlrm)
 
     if use_gpu:
-        if ngpus > 1 or args.emulate_8_gpu:
-            # Custom Model-Data Parallel
-            # the mlps are replicated and use data parallelism, while
-            # the embeddings are distributed and use model parallelism
-            dlrm.ndevices = min(ngpus, args.mini_batch_size, num_fea - 1)
+        # Custom Model-Data Parallel
+        # the mlps are replicated and use data parallelism, while
+        # the embeddings are distributed and use model parallelism
         dlrm = dlrm.to(device)  # .cuda()
-
-        #Add logic to allocate embedding tables on each device
-        dlrm.emb_l = dlrm.create_emb(m_spa, ln_emb, dlrm.ndevices)
+        if dlrm.ndevices > 1:
+            dlrm.emb_l = dlrm.create_emb(m_spa, ln_emb, dlrm.ndevices)
   
     # specify the loss function
     if args.loss_function == "mse":
@@ -749,10 +710,16 @@ if __name__ == "__main__":
 
     def dlrm_wrap(X, lS_o, lS_i, use_gpu, device, ndevices):
         if use_gpu:  # .cuda()
+            # lS_i can be either a list of tensors or a stacked tensor.
+            # Handle each case below:
+            lS_i = [S_i.to(i % ndevices) for i,S_i in enumerate(lS_i)] if isinstance(lS_i, list) \
+                else [lS_i[i].to(i % ndevices) for i in range(len(dlrm.emb_l))]
+            lS_o = [S_o.to(i % ndevices) for i,S_o in enumerate(lS_o)] if isinstance(lS_o, list) \
+                else [lS_o[i].to(i % ndevices) for i in range(len(dlrm.emb_l))]
             return dlrm(
                 X.to(device),
-                [S_o.to(i % ndevices) for i,S_o in enumerate(lS_o)],
-                [S_i.to(i % ndevices) for i,S_i in enumerate(lS_i)],
+                lS_o,
+                lS_i
             )
         else:
             return dlrm(X, lS_o, lS_i)
@@ -832,6 +799,7 @@ if __name__ == "__main__":
     print("time/loss/accuracy (if enabled):")
     with torch.autograd.profiler.profile(args.enable_profiling, use_gpu) as prof:
         while k < args.nepochs:
+            accum_time_begin = time_wrap(use_gpu)
             for j, (X, lS_o, lS_i, T) in enumerate(train_loader):
                 # early exit if nbatches was set by the user and has been exceeded
                 if j >= nbatches:
@@ -916,6 +884,9 @@ if __name__ == "__main__":
                             gT, gL, gA * 100
                         )
                     )
+                    # Uncomment the line below to print out the total time with overhead
+                    # print("Accumulated time so far: {}" \
+                    # .format(time_wrap(use_gpu) - accum_time_begin))
                     total_iter = 0
 
                 # testing
@@ -923,6 +894,7 @@ if __name__ == "__main__":
                     test_accu = 0
                     test_loss = 0
 
+                    accum_test_time_begin = time_wrap(use_gpu)
                     for jt, (X_test, lS_o_test, lS_i_test, T_test) in enumerate(test_loader):
                         # early exit if nbatches was set by the user and was exceeded
                         if jt >= nbatches:
@@ -990,6 +962,10 @@ if __name__ == "__main__":
                             gL_test, gA_test * 100, best_gA_test * 100
                         )
                     )
+                    # Uncomment the line below to print out the total time with overhead
+                    # print("Total test time for this group: {}" \
+                    # .format(time_wrap(use_gpu) - accum_test_time_begin))
+
 
             k += 1  # nepochs
 
