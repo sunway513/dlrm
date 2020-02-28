@@ -161,7 +161,7 @@ class DLRM_Net(nn.Module):
         ln_emb=None,
         ln_bot=None,
         ln_top=None,
-        use_bias_in_linear=False,
+        use_bias_in_linear=True,
         arch_interaction_op=None,
         arch_interaction_itself=False,
         sigmoid_bot=-1,
@@ -419,7 +419,7 @@ if __name__ == "__main__":
     # j will be replaced with the table number
     parser.add_argument("--arch-mlp-bot", type=str, default="4-3-2")
     parser.add_argument("--arch-mlp-top", type=str, default="4-2-1")
-    parser.add_argument("--use-bias-in-linear", type=bool, default=False)
+    parser.add_argument("--use-bias-in-linear", type=bool, default=True)
     parser.add_argument("--arch-interaction-op", type=str, default="dot")
     parser.add_argument("--arch-interaction-itself", action="store_true", default=False)
     # embedding table options
