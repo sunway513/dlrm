@@ -1,4 +1,5 @@
 #!/bin/bash
+pip3 install onnx
 cp *.sh ../ && cd ..
 bash pytorch_dlrm_py3.6_1_gpu_medium_4.sh |& tee   1_gpu_medium_4 
 sleep 5
